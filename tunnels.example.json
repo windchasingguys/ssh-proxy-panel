@@ -1,0 +1,69 @@
+{
+  "panel": {
+    "host": "127.0.0.1",
+    "port": 7788,
+    "token": "",
+    "openOnStart": false,
+    "sessionTtlMinutes": 720,
+    "sessionIdleMinutes": 120
+  },
+  "ssh": {
+    "bin": "ssh",
+    "connectTimeout": 10,
+    "serverAliveInterval": 15,
+    "serverAliveCountMax": 3,
+    "strictHostKeyChecking": "accept-new",
+    "batchMode": true,
+    "extraArgs": []
+  },
+  "supervision": {
+    "startTimeoutMs": 9000,
+    "watchIntervalMs": 5000,
+    "maxFailures": 12,
+    "backoffBaseMs": 1000,
+    "backoffMaxMs": 30000,
+    "stableResetMs": 60000
+  },
+  "tunnels": [
+    {
+      "id": "app",
+      "name": "项目 Web",
+      "description": "边缘机 → 内网项目 Web，本机 http://127.0.0.1:8080",
+      "localPort": 8080,
+      "target": { "host": "10.0.0.12", "port": 8080 },
+      "via": {
+        "user": "deploy",
+        "host": "edge.example.com",
+        "port": 22,
+        "identityFile": "~/.ssh/id_ed25519"
+      },
+      "scheme": "http",
+      "autoStart": false,
+      "openOnUp": false
+    },
+    {
+      "id": "app-db",
+      "name": "项目数据库",
+      "description": "内网 MySQL 映射到本机 127.0.0.1:13306",
+      "localPort": 13306,
+      "target": { "host": "10.0.0.13", "port": 3306 },
+      "via": "deploy@edge.example.com:22",
+      "autoStart": false
+    },
+    {
+      "id": "edge-admin",
+      "name": "先到跳板再到生产",
+      "description": "两跳：本机 → 跳板机 → 边缘机，再转发到项目端口",
+      "localPort": 9000,
+      "target": "127.0.0.1:9000",
+      "via": {
+        "user": "deploy",
+        "host": "edge.internal",
+        "port": 22,
+        "proxyJump": "jump@bastion.example.com:22",
+        "identityFile": "~/.ssh/id_ed25519"
+      },
+      "scheme": "http"
+    }
+  ]
+}

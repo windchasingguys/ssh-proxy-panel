@@ -1,0 +1,34 @@
+# Linux 用户级 systemd 服务示例（可选，面板跑在 Linux 上的情况）
+#
+# 安装：
+#   mkdir -p ~/.config/systemd/user
+#   cp scripts/ssh-proxy.service ~/.config/systemd/user/
+#   # 按需修改 ExecStart 里的路径
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now ssh-proxy
+#   # 想让它在你没登录时也跑（配合 loginctl enable-linger $USER）
+#   loginctl enable-linger "$USER"
+#
+# 查看状态/日志：
+#   systemctl --user status ssh-proxy
+#   journalctl --user -u ssh-proxy -f
+
+[Unit]
+Description=SSH -N -L tunnel panel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# %h 是当前用户 home，按你的实际路径改
+WorkingDirectory=%h/ssh-proxy
+ExecStart=/usr/bin/node %h/ssh-proxy/src/cli.mjs serve --quiet
+# 面板自己会托管 ssh 子进程；KillMode=control-group 保证服务停止时 ssh 一起退出
+KillMode=control-group
+Restart=always
+RestartSec=3
+# ssh 需要你的私钥和 ssh-agent
+Environment=SSH_AUTH_SOCK=%t/ssh-agent.socket
+
+[Install]
+WantedBy=default.target

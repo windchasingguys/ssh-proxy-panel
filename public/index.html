@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>SSH 隧道面板</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23111a24'/%3E%3Cpath d='M8 22l8-12 8 12' stroke='%2334d399' stroke-width='2.5' fill='none' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="#111a24" /><path d="M8 22l8-12 8 12" stroke="#34d399" stroke-width="2.5" fill="none" stroke-linecap="round" /></svg>
+        <div>
+          <h1>SSH 隧道面板</h1>
+          <p id="config-file" class="sub">ssh -N -L 本地端口转发 · 常驻后台 · 断线自愈</p>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <span id="stats" class="stats"></span>
+        <span id="session" class="session hidden"></span>
+        <button id="btn-logout" class="btn ghost hidden" type="button">退出</button>
+        <button id="btn-mask" class="btn ghost" type="button">隐藏边缘机</button>
+        <button id="btn-new" class="btn primary" type="button">＋ 新建隧道</button>
+        <button id="btn-start-all" class="btn ghost" type="button">全部开启</button>
+        <button id="btn-stop-all" class="btn ghost" type="button">全部关闭</button>
+        <button id="btn-settings" class="btn ghost" type="button" title="编辑 ssh / 重连策略等全局参数">全局设置</button>
+        <button id="btn-reload" class="btn ghost" type="button" title="重新读取 tunnels.json（手工改过文件时点这里）">重载配置</button>
+        <span id="conn" class="conn" title="面板实时连接状态"><i></i></span>
+      </div>
+    </header>
+
+    <main>
+      <div id="stale-banner" class="stale hidden">
+        <span>面板代码已经在服务端更新（版本 <code id="stale-version"></code>），刷新一下就能用上新版。</span>
+        <button class="btn small" id="btn-stale-reload" type="button">立刻刷新</button>
+      </div>
+      <section id="grid" class="grid" aria-live="polite"></section>
+      <p id="empty" class="empty hidden">
+        还没有配置隧道。点右上角 <b>＋ 新建隧道</b> 直接在面板里加一条；也可以手工编辑项目根目录下的
+        <code>tunnels.json</code>（参考 <code>tunnels.example.json</code>）后点“重载配置”。
+      </p>
+    </main>
+
+    <footer class="foot">
+      <span>提示：面板改的是同一个 <code>tunnels.json</code>，手写和面板编辑可以混用；面板只监听 127.0.0.1，关掉浏览器不会断开隧道。</span>
+    </footer>
+
+    <aside id="drawer" class="drawer" hidden>
+      <header>
+        <h2 id="drawer-title">日志</h2>
+        <div class="drawer-actions">
+          <button id="btn-log-refresh" class="btn ghost small" type="button">刷新</button>
+          <button id="btn-log-copy" class="btn ghost small" type="button">复制</button>
+          <button id="btn-log-close" class="btn ghost small" type="button">关闭</button>
+        </div>
+      </header>
+      <pre id="drawer-log" class="log"></pre>
+    </aside>
+
+    <!-- 新建 / 编辑隧道 -->
+    <div id="editor" class="modal" hidden>
+      <form class="modal-card wide" id="editor-form" novalidate>
+        <h2 id="editor-title">新建隧道</h2>
+        <p class="hint" id="editor-hint">
+          <b>目标地址</b>是「边缘机视角」的地址：填 <code>127.0.0.1</code> 表示边缘机自己，填内网 IP 表示边缘机能连到的机器。
+        </p>
+        <div class="form-grid">
+          <label>ID <input name="id" required placeholder="app" pattern="[A-Za-z0-9._-]+" /></label>
+          <label>名称 <input name="name" placeholder="项目 Web" /></label>
+          <label class="wide">说明 <input name="description" placeholder="边缘机 → 内网项目，本机 8080" /></label>
+
+          <label>本机端口 <input name="localPort" type="number" min="1" max="65535" required placeholder="8080" /></label>
+          <label>本机监听地址 <input name="bindAddress" placeholder="127.0.0.1" /></label>
+          <label>目标主机 <input name="targetHost" placeholder="10.0.0.12" /></label>
+          <label>目标端口 <input name="targetPort" type="number" min="1" max="65535" placeholder="留空=本机端口" /></label>
+
+          <label>边缘机用户 <input name="viaUser" placeholder="deploy" /></label>
+          <label>边缘机地址 <input name="viaHost" required placeholder="edge.example.com" /></label>
+          <label>边缘机端口 <input name="viaPort" type="number" min="1" max="65535" placeholder="22" /></label>
+          <label>私钥文件 <input name="identityFile" placeholder="~/.ssh/id_ed25519" /></label>
+          <label class="wide">ProxyJump（可选，两跳）<input name="proxyJump" placeholder="jump@bastion.example.com:22" /></label>
+
+          <label class="wide sep-label">SSH 认证</label>
+          <label>认证方式
+            <select name="authMode">
+              <option value="key">私钥（推荐）</option>
+              <option value="password">存储密码（加密保存）</option>
+              <option value="ask">连接时输入（不保存）</option>
+            </select>
+          </label>
+          <label>密码 / 私钥口令 <input name="authPassword" type="password" autocomplete="new-password" placeholder="留空＝保持不变" /></label>
+          <label class="wide check"><input type="checkbox" name="authClearPassword" /> 清除已保存的密码/口令</label>
+          <p class="wide hint" id="auth-hint"></p>
+
+          <label>浏览器协议 <input name="scheme" placeholder="http 或 https" /></label>
+          <label>打开路径（可选） <input name="url" placeholder="/admin/login 或 https://…" /></label>
+          <label>健康检查 URL（可选）<input name="healthUrl" placeholder="http://127.0.0.1:8080/healthz" /></label>
+          <label class="wide">额外 ssh 参数（空格分隔）<input name="extraArgs" placeholder="-o Compression=yes" /></label>
+
+          <label class="check"><input type="checkbox" name="autoStart" /> 面板启动时自动开启</label>
+          <label class="check"><input type="checkbox" name="openOnUp" /> 连通后自动打开浏览器</label>
+        </div>
+        <p class="form-error hidden" id="editor-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="editor-cancel">取消</button>
+          <button type="submit" class="btn primary" id="editor-save">保存</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- 连接时输入密码/口令 -->
+    <div id="secret-modal" class="modal" hidden>
+      <form class="modal-card" id="secret-form">
+        <h2>输入 SSH 密码 / 口令</h2>
+        <p class="hint" id="secret-hint">这条隧道设置了「连接时输入」。凭据只保存在内存里，重启面板后需要重新输入。</p>
+        <input id="secret-input" type="password" autocomplete="off" placeholder="密码或私钥口令" />
+        <p class="form-error hidden" id="secret-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="secret-cancel">取消</button>
+          <button class="btn primary" type="submit" id="secret-submit">连接</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- 全局设置 -->
+    <div id="settings" class="modal" hidden>
+      <form class="modal-card wide" id="settings-form" novalidate>
+        <h2>全局设置</h2>
+        <p class="hint">写进 <code id="settings-file">tunnels.json</code> 的 <code>ssh</code> / <code>supervision</code> 段。保存后：ssh 参数变化会重建所有在跑的隧道，重连策略立即生效。</p>
+        <div class="form-grid">
+          <label>ssh 可执行文件 <input name="bin" placeholder="ssh" /></label>
+          <label>连接超时（秒）<input name="connectTimeout" type="number" min="1" /></label>
+          <label>ServerAliveInterval（秒）<input name="serverAliveInterval" type="number" min="1" /></label>
+          <label>ServerAliveCountMax <input name="serverAliveCountMax" type="number" min="1" /></label>
+          <label>StrictHostKeyChecking
+            <select name="strictHostKeyChecking">
+              <option value="accept-new">accept-new（首次自动接受，推荐）</option>
+              <option value="yes">yes（严格，主机变了就拒绝）</option>
+              <option value="no">no（不校验，有中间人风险）</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" name="batchMode" /> BatchMode（禁止密码交互，只能用密钥）</label>
+
+          <label>就绪超时（毫秒）<input name="startTimeoutMs" type="number" min="1000" /></label>
+          <label>探活间隔（毫秒）<input name="watchIntervalMs" type="number" min="500" /></label>
+          <label>最大连续失败次数 <input name="maxFailures" type="number" min="1" /></label>
+          <label>初始退避（毫秒）<input name="backoffBaseMs" type="number" min="100" /></label>
+          <label>最大退避（毫秒）<input name="backoffMaxMs" type="number" min="1000" /></label>
+          <label>稳定多久清零失败（毫秒）<input name="stableResetMs" type="number" min="1000" /></label>
+
+          <label class="wide sep-label">访问令牌与会话（保存后需重启面板生效）</label>
+          <label>设置访问令牌 <input name="panelToken" type="password" autocomplete="new-password" placeholder="留空＝不需要登录" /></label>
+          <label>会话有效期（分钟）<input name="sessionTtlMinutes" type="number" min="1" /></label>
+          <label>闲置超时（分钟）<input name="sessionIdleMinutes" type="number" min="1" /></label>
+          <label class="check"><input type="checkbox" name="clearPanelToken" /> 清除访问令牌（面板不再需要登录）</label>
+
+          <div class="wide key-box">
+            <div class="key-box-head">
+              <span class="sep-label-inline">密钥登录（Ed25519，私钥只留在浏览器里）</span>
+              <button type="button" class="btn small" id="btn-register-key">注册本机密钥</button>
+            </div>
+            <div id="key-list" class="key-list"></div>
+            <p class="hint" id="key-hint"></p>
+          </div>
+        </div>
+        <p class="form-error hidden" id="settings-error"></p>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="settings-cancel">取消</button>
+          <button type="submit" class="btn primary" id="settings-save">保存</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="token-modal" class="modal" hidden>
+      <form class="modal-card" id="token-form" novalidate>
+        <h2>登录面板</h2>
+        <p class="hint" id="token-hint"></p>
+        <div class="auth-tabs" id="auth-tabs" hidden></div>
+
+        <div class="auth-panel" data-mode="token">
+          <input id="token-input" type="password" autocomplete="current-password" placeholder="访问令牌" />
+        </div>
+        <div class="auth-panel" data-mode="password" hidden>
+          <input id="password-input" type="password" autocomplete="current-password" placeholder="登录密码" />
+        </div>
+        <div class="auth-panel" data-mode="key" hidden>
+          <button type="button" class="btn key-login-btn" id="btn-key-login">用本机密钥登录</button>
+          <p class="hint" id="key-login-hint"></p>
+        </div>
+
+        <label class="remember" id="remember-row"><input type="checkbox" id="token-remember" /> 记住令牌（下次自动登录，仅存在本机浏览器）</label>
+        <p class="form-error hidden" id="token-error"></p>
+        <details id="token-diag" class="diag">
+          <summary>仍然进不去？点开看诊断信息</summary>
+          <pre id="token-diag-body"></pre>
+        </details>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="btn-token-clear">清除已保存的令牌</button>
+          <button class="btn primary" type="submit" id="token-submit">登录</button>
+        </div>
+      </form>
+    </div>
+
+    <div id="toasts" class="toasts"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

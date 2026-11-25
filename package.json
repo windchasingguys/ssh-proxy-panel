@@ -1,0 +1,27 @@
+{
+  "name": "ssh-proxy-panel",
+  "version": "1.0.0",
+  "private": true,
+  "description": "本地 SSH -N -L 隧道控制器 + Web 面板：一键开/关本地端口转发，断线自动重连，不占用终端窗口",
+  "type": "module",
+  "bin": {
+    "ssh-proxy": "src/cli.mjs"
+  },
+  "scripts": {
+    "start": "node src/cli.mjs serve --open",
+    "panel": "node src/cli.mjs serve",
+    "status": "node src/cli.mjs status",
+    "init": "node src/cli.mjs init",
+    "demo": "node test/demo-config.mjs",
+    "test": "node test/smoke.mjs",
+    "test:ui": "node test/ui-check.mjs --url http://127.0.0.1:7799/ --allow-write",
+    "build:exe": "node scripts/build-exe.mjs"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2",
+    "postject": "^1.0.0-alpha.6"
+  }
+}
