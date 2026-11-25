@@ -1,4 +1,4 @@
-# 卸载「登录后自动启动 SSH 隧道面板」计划任务
+﻿# 卸载「登录后自动启动 SSH 隧道面板」计划任务
 $ErrorActionPreference = 'Stop'
 $taskName = 'SshProxyPanel'
 

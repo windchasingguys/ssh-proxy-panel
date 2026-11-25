@@ -1,4 +1,4 @@
-# 注册「登录后自动启动 SSH 隧道面板」计划任务（Windows，当前用户，无需管理员）
+﻿# 注册「登录后自动启动 SSH 隧道面板」计划任务（Windows，当前用户，无需管理员）
 #
 # 用法（在项目根目录）：
 #   powershell -ExecutionPolicy Bypass -File scripts\install-autostart.ps1

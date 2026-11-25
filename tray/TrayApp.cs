@@ -21,19 +21,21 @@ namespace SshProxyTray
         [STAThread]
         private static void Main(string[] args)
         {
-            // --prepare：只解包（给安装脚本/自检用），不弹托盘
+            // --prepare：只解包并自检（给安装脚本/CI 用），不弹托盘
             if (args != null && Array.IndexOf(args, "--prepare") >= 0)
             {
                 try
                 {
                     var ctx = new TrayContext(false);
                     Console.WriteLine("core: " + ctx.CorePath);
-                    Console.WriteLine("web : " + ctx.RuntimeDir);
+                    Console.WriteLine("web : " + Path.Combine(ctx.RuntimeDir, "public"));
+                    ctx.VerifyExtracted();
+                    Console.WriteLine("ok");
                     Environment.Exit(0);
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine(ex.Message);
+                    Console.Error.WriteLine("prepare failed: " + ex.Message);
                     Environment.Exit(1);
                 }
                 return;
@@ -73,6 +75,23 @@ namespace SshProxyTray
 
         public string CorePath { get { return _corePath; } }
         public string RuntimeDir { get { return _runtimeDir; } }
+
+        /// <summary>--prepare 的自检：解出来的文件必须真的在</summary>
+        public void VerifyExtracted()
+        {
+            if (!File.Exists(_corePath))
+            {
+                throw new InvalidOperationException("控制器没有解包出来: " + _corePath);
+            }
+            foreach (string name in WebFiles)
+            {
+                string file = Path.Combine(_runtimeDir, "public", name);
+                if (!File.Exists(file))
+                {
+                    throw new InvalidOperationException("前端文件没有解包出来: " + file);
+                }
+            }
+        }
 
         public TrayContext() : this(true) { }
 
