@@ -1,0 +1,23 @@
+# 统一行尾：仓库里存 LF，Windows 工作区按需转 CRLF
+* text=auto
+
+# 源码 / 文档 / 服务配置：一律 LF
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.html  text eol=lf
+*.json  text eol=lf
+*.md    text eol=lf
+*.yml   text eol=lf
+*.service text eol=lf
+
+# Windows 脚本：必须 CRLF，否则 cmd.exe / 任务计划可能出问题
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+*.cs    text eol=crlf
+
+# 二进制：不要做任何转换
+*.png   binary
+*.ico   binary
+*.exe   binary
+*.zip   binary

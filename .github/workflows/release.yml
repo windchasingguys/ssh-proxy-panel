@@ -1,0 +1,53 @@
+name: release
+
+# 打 tag（v1.0.0 这种）时自动构建 Windows 单文件 exe 并挂到 Release
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: 构建 ssh-proxy.exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 安装打包工具（esbuild / postject）
+        run: npm ci
+
+      - name: 打包（Node SEA + csc 托盘）
+        run: node scripts/build-exe.mjs
+
+      - name: 冒烟验证产物
+        shell: pwsh
+        run: |
+          & .\dist\ssh-proxy.exe --prepare
+          if (-not (Test-Path "$env:LOCALAPPDATA\ssh-proxy\runtime")) { throw '解包失败' }
+          $core = Get-ChildItem "$env:LOCALAPPDATA\ssh-proxy\runtime" -Recurse -Filter ssh-proxy-core.exe | Select-Object -First 1
+          & $core.FullName version
+
+      - name: 上传到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/ssh-proxy.exe
+            dist/ssh-proxy-portable.zip
+          generate_release_notes: true
+
+      - name: 留一份构建产物（非 tag 触发时）
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-proxy-windows
+          path: |
+            dist/ssh-proxy.exe
+            dist/ssh-proxy-portable.zip

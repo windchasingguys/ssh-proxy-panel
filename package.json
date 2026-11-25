@@ -2,6 +2,7 @@
   "name": "ssh-proxy-panel",
   "version": "1.0.0",
   "private": true,
+  "license": "MIT",
   "description": "本地 SSH -N -L 隧道控制器 + Web 面板：一键开/关本地端口转发，断线自动重连，不占用终端窗口",
   "type": "module",
   "bin": {
