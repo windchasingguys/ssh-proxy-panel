@@ -225,14 +225,19 @@ pub fn kill_tree(pid: u32) {
     if pid == 0 {
         return;
     }
-    if cfg!(windows) {
+    // 注意：这里必须用 `#[cfg]` 而不是 `if cfg!(..)`——后者两边都会编译，
+    // 而 `libc` 只在 unix 目标上声明，Windows 下会 "cannot find crate libc"。
+    #[cfg(windows)]
+    {
         let _ = std::process::Command::new("taskkill")
             .args(["/PID", &pid.to_string(), "/T", "/F"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .status();
-    } else {
-        // POSIX：我们 spawn 的 ssh 是进程组组长（`process_group(0)`），所以要打 -pid；
+    }
+    #[cfg(unix)]
+    {
+        // 我们 spawn 的 ssh 是进程组组长（`process_group(0)`），所以要打 -pid；
         // 但**别人的孤儿**（比如测试里手工起的 ssh）不是组长，`kill(-pid)` 会 ESRCH。
         // 两条都发一遍：对组长有效的是前者，对普通进程有效的是后者，互相不冲突。
         let pid_i = pid as i32;
@@ -241,10 +246,9 @@ pub fn kill_tree(pid: u32) {
             libc::kill(pid_i, libc::SIGTERM);
         }
         // 给 ssh 一点体面退出的时间；放到独立线程里，别阻塞 tokio 的工作线程
-        let escalated = pid;
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(300));
-            let pid_i = escalated as i32;
+            let pid_i = pid as i32;
             unsafe {
                 libc::kill(-pid_i, libc::SIGKILL);
                 libc::kill(pid_i, libc::SIGKILL);
