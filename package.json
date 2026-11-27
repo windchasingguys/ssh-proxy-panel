@@ -21,6 +21,7 @@
     "test:rust:config": "node rust/tools/config-parity.mjs",
     "test:rust:cli": "node rust/tools/cli-parity.mjs",
     "test:rust:smoke": "node test/smoke.mjs --target rust",
+    "test:rust:unit": "cd rust && cargo test --release",
     "build:exe": "node scripts/build-exe.mjs"
   },
   "engines": {

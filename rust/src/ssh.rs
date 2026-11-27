@@ -292,3 +292,126 @@ pub fn read_cmdline(pid: u32) -> String {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::normalize_config;
+    use serde_json::json;
+    use std::path::Path;
+
+    fn config_with(tunnels: serde_json::Value, ssh: serde_json::Value) -> Config {
+        normalize_config(
+            &json!({ "ssh": ssh, "tunnels": tunnels }),
+            Path::new("unit-tunnels.json"),
+        )
+        .unwrap()
+    }
+
+    fn simple_config() -> Config {
+        config_with(
+            json!([{
+                "id": "app",
+                "localPort": 8080,
+                "target": { "host": "10.0.0.12", "port": 8080 },
+                "via": { "user": "deploy", "host": "edge.test", "port": 22, "identityFile": "/keys/id_ed25519" }
+            }]),
+            json!({ "bin": "ssh" }),
+        )
+    }
+
+    #[test]
+    fn ssh_args_are_byte_stable() {
+        let config = simple_config();
+        let args = build_ssh_args(&config.tunnels[0], &config, None);
+        assert_eq!(
+            args.join(" "),
+            "-N -T -o ExitOnForwardFailure=yes -o ConnectTimeout=10 -o ServerAliveInterval=15 \
+             -o ServerAliveCountMax=3 -o StrictHostKeyChecking=accept-new -o TCPKeepAlive=yes \
+             -o BatchMode=yes -p 22 -i /keys/id_ed25519 \
+             -L 127.0.0.1:8080:10.0.0.12:8080 deploy@edge.test"
+        );
+    }
+
+    #[test]
+    fn password_mode_disables_publickey_and_batchmode() {
+        let config = config_with(
+            json!([{
+                "id": "app",
+                "localPort": 8080,
+                "via": "deploy@edge.test:22",
+                "auth": { "mode": "password", "password": "enc:v1:AAAA:BBBB:CCCC" }
+            }]),
+            json!({ "bin": "ssh" }),
+        );
+        let args = build_ssh_args(&config.tunnels[0], &config, None).join(" ");
+        assert!(args.contains("-o PubkeyAuthentication=no"));
+        assert!(args.contains("-o PreferredAuthentications=password,keyboard-interactive"));
+        assert!(args.contains("-o BatchMode=no"));
+        assert!(!args.contains(" -i "));
+    }
+
+    #[test]
+    fn secret_flips_batchmode_off() {
+        let config = simple_config();
+        let with_secret = build_ssh_args(&config.tunnels[0], &config, Some("pw")).join(" ");
+        assert!(with_secret.contains("-o BatchMode=no"));
+        let without = build_ssh_args(&config.tunnels[0], &config, None).join(" ");
+        assert!(without.contains("-o BatchMode=yes"));
+    }
+
+    #[test]
+    fn proxy_jump_and_known_hosts_are_passed() {
+        let config = config_with(
+            json!([{
+                "id": "app",
+                "localPort": 8080,
+                "via": { "host": "edge.test", "proxyJump": "jump@bastion.test:22", "knownHostsFile": "/keys/known_hosts" }
+            }]),
+            json!({ "bin": "ssh" }),
+        );
+        let args = build_ssh_args(&config.tunnels[0], &config, None).join(" ");
+        assert!(args.contains("-J jump@bastion.test:22"));
+        assert!(args.contains("-o UserKnownHostsFile=/keys/known_hosts"));
+    }
+
+    #[test]
+    fn command_prefix_supports_array_bin() {
+        let config = config_with(json!([]), json!({ "bin": ["/usr/bin/node", "fake-ssh.mjs"] }));
+        let tunnel = crate::config::normalize_tunnel(
+            &json!({ "id": "a", "localPort": 8080, "via": "d@e.test:22" }),
+            0,
+        )
+        .unwrap();
+        assert_eq!(
+            command_prefix(&tunnel, &config),
+            vec!["/usr/bin/node".to_string(), "fake-ssh.mjs".to_string()]
+        );
+    }
+
+    #[test]
+    fn format_command_quotes_only_when_needed() {
+        let text = format_command(
+            &["ssh".to_string()],
+            &["-L".to_string(), "a b".to_string(), "-p".to_string(), "22".to_string()],
+        );
+        assert_eq!(text, "ssh -L \"a b\" -p 22");
+    }
+
+    #[test]
+    fn open_url_handles_path_and_full_url() {
+        let mut tunnel = crate::config::normalize_tunnel(
+            &json!({ "id": "a", "localPort": 8080, "via": "d@e.test:22" }),
+            0,
+        )
+        .unwrap();
+        assert_eq!(open_url(&tunnel), "http://127.0.0.1:8080/");
+        tunnel.url = "/admin/login".to_string();
+        assert_eq!(open_url(&tunnel), "http://127.0.0.1:8080/admin/login");
+        tunnel.url = "https://example.com/x".to_string();
+        assert_eq!(open_url(&tunnel), "https://example.com/x");
+        tunnel.url = String::new();
+        tunnel.bind_address = "0.0.0.0".to_string();
+        tunnel.scheme = "https".to_string();
+        assert_eq!(open_url(&tunnel), "https://127.0.0.1:8080/");
+    }
+}

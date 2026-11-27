@@ -246,3 +246,68 @@ pub fn random_hex(bytes: usize) -> String {
     }
     buf.iter().map(|b| format!("{:02x}", b)).collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const KEY_OPENSSH: &str = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE6bfEKWR/PwePxw0zo2vuyTiSgP6Bfk83Z67DfF0rjc";
+    const KEY_FINGERPRINT: &str = "SHA256:VsOzqk40SkoEgokfNpaMcSWK1FfPn5q5nw1l5JTfY98";
+    const HASH_OF_UNIT_TEST_PW: &str =
+        "scrypt$16384$8$1$7to9V1ioLLZMncE3M8gFTg==$vZI7t96GVlHmU3tW6Jn3C4lllbAmZC8xcFSFSOCdcks=";
+
+    #[test]
+    fn password_hash_format_is_recognised() {
+        assert!(is_password_hash(HASH_OF_UNIT_TEST_PW));
+        assert!(!is_password_hash("scrypt$16384$8$1$onlyfiveparts"));
+        assert!(!is_password_hash("明文密码"));
+        assert!(!is_password_hash(""));
+    }
+
+    #[test]
+    fn verify_password_accepts_the_real_one_only() {
+        assert!(verify_password("unit-test-pw", HASH_OF_UNIT_TEST_PW));
+        assert!(!verify_password("unit-test-pW", HASH_OF_UNIT_TEST_PW));
+        assert!(!verify_password("", HASH_OF_UNIT_TEST_PW));
+    }
+
+    #[test]
+    fn hash_then_verify_round_trips() {
+        let hash = hash_password("round-trip-pw").unwrap();
+        assert!(verify_password("round-trip-pw", &hash));
+        assert!(!verify_password("other", &hash));
+    }
+
+    #[test]
+    fn public_key_normalisation() {
+        // 完整的 authorized_keys 行会被裁成 "类型 base64"
+        let padded = format!("  {}  laptop@host  ", KEY_OPENSSH);
+        assert_eq!(normalize_public_key(&padded).unwrap(), KEY_OPENSSH);
+        assert!(normalize_public_key("").is_err());
+        assert!(normalize_public_key("not-a-key").is_err());
+        // PEM 原样保留（去掉回车与尾部空行）
+        let pem = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEATpt8QpZH8/B4/HDTOja+7JOJKA/oF+TzdnrsN8XSuNw=\n-----END PUBLIC KEY-----";
+        assert_eq!(normalize_public_key(pem).unwrap(), pem);
+    }
+
+    #[test]
+    fn fingerprint_is_sha256_of_spki_der() {
+        // 注意：算的是 SPKI DER，不是 OpenSSH 线上 blob —— 与 Node 的 publicKeyFingerprint 一致
+        assert_eq!(public_key_fingerprint(KEY_OPENSSH), KEY_FINGERPRINT);
+        assert_eq!(public_key_fingerprint("garbage"), "");
+    }
+
+    #[test]
+    fn fingerprint_matches_pem_and_openssh_forms() {
+        let pem = "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEATpt8QpZH8/B4/HDTOja+7JOJKA/oF+TzdnrsN8XSuNw=\n-----END PUBLIC KEY-----";
+        assert_eq!(public_key_fingerprint(pem), KEY_FINGERPRINT);
+    }
+
+    #[test]
+    fn challenge_is_32_random_bytes_base64() {
+        let a = new_challenge();
+        let b = new_challenge();
+        assert_ne!(a, b);
+        assert_eq!(b64().decode(&a).unwrap().len(), 32);
+    }
+}

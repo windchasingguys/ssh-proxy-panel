@@ -317,6 +317,7 @@ fn index_of_tunnel(raw_tunnels: &[Value], normalized_ids: &[String], id: &str) -
         .position(|item| as_string(item.get("id")) == id)
 }
 
+#[derive(Debug)]
 pub struct MutateResult {
     pub raw: Value,
     pub config: Config,
@@ -498,6 +499,7 @@ pub fn set_password_hash(file: &Path, hash: &str) -> Result<MutateResult, String
     Ok(MutateResult { raw, config })
 }
 
+#[derive(Debug)]
 pub struct AddKeyResult {
     pub raw: Value,
     pub config: Config,
@@ -609,4 +611,104 @@ pub fn remove_public_key(file: &Path, id_or_fingerprint: &str) -> Result<MutateR
     raw["panel"] = Value::Object(panel);
     let config = normalize_config(&raw, file)?;
     Ok(MutateResult { raw, config })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn tunnel_from_payload_keeps_field_order() {
+        let payload = json!({
+            "id": "app",
+            "name": "项目 Web",
+            "description": "说明",
+            "localPort": 8080,
+            "target": { "host": "10.0.0.12", "port": 80 },
+            "via": { "user": "deploy", "host": "edge.test", "port": 22 },
+            "auth": { "mode": "key" },
+            "url": "/login",
+            "autoStart": true
+        });
+        let tunnel = tunnel_from_payload(&payload, None).unwrap();
+        let keys: Vec<&str> = tunnel.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["id", "name", "description", "localPort", "target", "via", "auth", "url", "autoStart"]
+        );
+    }
+
+    #[test]
+    fn tunnel_from_payload_keeps_handwritten_fields() {
+        let previous = json!({
+            "id": "app",
+            "localPort": 8080,
+            "via": "d@e.test:22",
+            "env": { "FAKE_SSH_MODE": "ok" },
+            "sshBin": ["/usr/bin/node", "fake-ssh.mjs"],
+            "handwritten": "别动我"
+        });
+        let payload = json!({
+            "id": "app",
+            "localPort": 8080,
+            "via": { "host": "e.test", "port": 22 }
+        });
+        let tunnel = tunnel_from_payload(&payload, Some(&previous)).unwrap();
+        // env / sshBin 是显式保留键；其它未知键（handwritten）JS 版也不会保留，这里跟着不保留
+        assert!(tunnel.get("env").is_some());
+        assert!(tunnel.get("sshBin").is_some());
+        assert!(tunnel.get("handwritten").is_none());
+    }
+
+    #[test]
+    fn clear_password_flag_drops_the_secret() {
+        let previous = json!({
+            "id": "app", "localPort": 8080, "via": "d@e.test:22",
+            "auth": { "mode": "password", "password": "enc:v1:AAAA:BBBB:CCCC" }
+        });
+        let payload = json!({
+            "id": "app", "localPort": 8080, "via": { "host": "e.test", "port": 22 },
+            "auth": { "mode": "key", "clearPassword": true }
+        });
+        let tunnel = tunnel_from_payload(&payload, Some(&previous)).unwrap();
+        assert!(tunnel["auth"].get("password").is_none());
+        assert_eq!(tunnel["auth"]["mode"], json!("key"));
+    }
+
+    #[test]
+    fn invalid_id_and_missing_via_are_rejected() {
+        let err = tunnel_from_payload(&json!({ "id": "带 中文", "localPort": 8080, "via": "d@e:22" }), None)
+            .unwrap_err();
+        assert!(err.contains("id 只能包含"));
+        let err = tunnel_from_payload(&json!({ "id": "a", "localPort": 8080 }), None).unwrap_err();
+        assert!(err.contains("via.host"));
+    }
+
+    #[test]
+    fn numeric_strings_are_normalised_to_numbers() {
+        let tunnel = tunnel_from_payload(
+            &json!({
+                "id": "a",
+                "localPort": "8080",
+                "target": { "host": "10.0.0.1", "port": "80" },
+                "via": { "host": "e.test", "port": "2222" }
+            }),
+            None,
+        )
+        .unwrap();
+        // 落盘必须是整数，不能写成 8080.0（否则整份文件都会被 diff）
+        assert_eq!(tunnel["localPort"], json!(8080));
+        assert_eq!(tunnel["target"]["port"], json!(80));
+        assert_eq!(tunnel["via"]["port"], json!(2222));
+    }
+
+    #[test]
+    fn settings_reject_invalid_strict_host_key_checking() {
+        let file = std::env::temp_dir().join(format!("ssh-proxy-unit-{}.json", std::process::id()));
+        std::fs::write(&file, "{\"tunnels\":[]}").unwrap();
+        let err = mutate_settings(&file, &json!({ "ssh": { "strictHostKeyChecking": "maybe" } })).unwrap_err();
+        assert!(err.contains("StrictHostKeyChecking"));
+        let _ = std::fs::remove_file(&file);
+    }
 }

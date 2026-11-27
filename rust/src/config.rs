@@ -918,3 +918,142 @@ fn tunnel_for_form(tunnel: &Tunnel) -> Value {
         "openOnUp": tunnel.open_on_up,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::path::Path;
+
+    fn one_tunnel(value: Value) -> Result<Tunnel, String> {
+        normalize_tunnel(&value, 0)
+    }
+
+    fn config_of(value: Value) -> Result<Config, String> {
+        normalize_config(&value, Path::new("unit-tunnels.json"))
+    }
+
+    #[test]
+    fn local_port_aliases_are_accepted() {
+        for raw in [
+            json!({ "id": "a", "localPort": 8080, "target": "10.0.0.1:80", "via": "d@e.test:22" }),
+            json!({ "id": "a", "listenPort": 8080, "target": "10.0.0.1:80", "via": "d@e.test:22" }),
+            json!({ "id": "a", "port": 8080, "target": "10.0.0.1:80", "via": "d@e.test:22" }),
+        ] {
+            assert_eq!(one_tunnel(raw).unwrap().local_port, 8080);
+        }
+    }
+
+    #[test]
+    fn via_string_is_parsed() {
+        let tunnel = one_tunnel(json!({
+            "id": "a", "localPort": 8080, "via": "deploy@edge.test:2222"
+        }))
+        .unwrap();
+        assert_eq!(tunnel.via.user.as_deref(), Some("deploy"));
+        assert_eq!(tunnel.via.host, "edge.test");
+        assert_eq!(tunnel.via.port, 2222);
+    }
+
+    #[test]
+    fn forward_spec_matches_ssh_dash_l() {
+        let tunnel = one_tunnel(json!({
+            "id": "a", "localPort": 8080, "bindAddress": "127.0.0.1",
+            "target": { "host": "10.0.0.12", "port": 80 }, "via": "d@e.test:22"
+        }))
+        .unwrap();
+        assert_eq!(tunnel.forward_spec, "127.0.0.1:8080:10.0.0.12:80");
+    }
+
+    #[test]
+    fn id_falls_back_to_slug_of_name() {
+        let tunnel = one_tunnel(json!({
+            "name": "Project Web!", "localPort": 8080, "via": "d@e.test:22"
+        }))
+        .unwrap();
+        assert_eq!(tunnel.id, "project-web");
+    }
+
+    #[test]
+    fn id_with_illegal_chars_is_rejected() {
+        let err = one_tunnel(json!({
+            "id": "带 中文", "localPort": 8080, "via": "d@e.test:22"
+        }))
+        .unwrap_err();
+        assert!(err.contains("id 只能包含"));
+    }
+
+    #[test]
+    fn plaintext_password_is_rejected() {
+        let err = one_tunnel(json!({
+            "id": "a", "localPort": 8080, "via": "d@e.test:22",
+            "auth": { "mode": "password", "password": "明文" }
+        }))
+        .unwrap_err();
+        assert!(err.contains("必须是加密后的值"));
+    }
+
+    #[test]
+    fn ask_mode_needs_no_password() {
+        let tunnel = one_tunnel(json!({
+            "id": "a", "localPort": 8080, "via": "d@e.test:22",
+            "auth": { "mode": "ask" }
+        }))
+        .unwrap();
+        assert_eq!(tunnel.auth.mode, AuthMode::Ask);
+    }
+
+    #[test]
+    fn duplicate_ids_are_rejected() {
+        let err = config_of(json!({
+            "tunnels": [
+                { "id": "same", "localPort": 8080, "via": "d@e.test:22" },
+                { "id": "same", "localPort": 8081, "via": "d@e.test:22" }
+            ]
+        }))
+        .unwrap_err();
+        assert!(err.contains("隧道 id 重复"));
+    }
+
+    #[test]
+    fn panel_port_zero_is_allowed() {
+        // JS 不校验 panel.port；0 表示让系统选随机端口（smoke 就靠这个）
+        let config = config_of(json!({ "panel": { "port": 0 }, "tunnels": [] })).unwrap();
+        assert_eq!(config.panel.port, 0);
+    }
+
+    #[test]
+    fn auth_methods_are_derived_from_credentials() {
+        let config = config_of(json!({
+            "panel": {
+                "token": "t",
+                "passwordHash": "scrypt$16384$8$1$AAAA$BBBB",
+            },
+            "tunnels": []
+        }))
+        .unwrap();
+        assert_eq!(config.panel.auth_methods, vec!["token", "password"]);
+    }
+
+    #[test]
+    fn auth_methods_can_only_subtract() {
+        // 配置里写 authMethods 只能做减法，不能凭空加出没配凭据的方式
+        let config = config_of(json!({
+            "panel": { "token": "t", "authMethods": ["token", "key"] },
+            "tunnels": []
+        }))
+        .unwrap();
+        assert_eq!(config.panel.auth_methods, vec!["token"]);
+    }
+
+    #[test]
+    fn unknown_fields_survive_parsing() {
+        let config = config_of(json!({
+            "ssh": { "bin": ["/usr/bin/ssh", "-v"], "extraArgs": ["-o", "LogLevel=ERROR"] },
+            "tunnels": []
+        }))
+        .unwrap();
+        assert!(config.ssh.bin.is_array());
+        assert_eq!(config.ssh.extra_args, vec!["-o", "LogLevel=ERROR"]);
+    }
+}
