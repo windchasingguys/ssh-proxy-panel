@@ -70,17 +70,20 @@ function coreChoice() {
   return value;
 }
 
-/** 找 cargo：env > 本机手工工具链 > PATH */
+/**
+ * 找 cargo：CARGO_BIN > PATH 上的 cargo > 本机手工工具链（历史位置）。
+ * 正常情况下把工具链 bin 加进 PATH 就够了；CARGO_BIN 是给 CI / 特殊布局用的兜底。
+ */
 function findCargo() {
   const candidates = [
     process.env.CARGO_BIN,
-    path.join(process.env.LOCALAPPDATA || '', 'rust-toolchain', '1.100.0', 'bin', 'cargo.exe'),
     'cargo',
+    path.join(process.env.LOCALAPPDATA || '', 'rust-toolchain', '1.100.0', 'bin', 'cargo.exe'),
   ].filter(Boolean);
   for (const candidate of candidates) {
     if (candidate === 'cargo' || fs.existsSync(candidate)) return candidate;
   }
-  return fail('找不到 cargo；用 CARGO_BIN 指定，或先安装 Rust 工具链');
+  return fail('找不到 cargo；用 CARGO_BIN 指定，或把 Rust 工具链的 bin 加进 PATH');
 }
 
 /** Rust 控制器：cargo build --release，产物复制成 core */
