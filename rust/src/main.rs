@@ -292,6 +292,13 @@ fn serve(config: config::Config, flags: Flags) -> Result<i32, String> {
     let open_on_start = config.panel.open_on_start;
     let quiet = flags.quiet;
     let config_exists = config.config_exists;
+    // https 的 healthUrl 目前只做 TCP 探测（见 50 D24）；启动时列出来，别让人以为探活是准的
+    let tunnels_with_https_health: Vec<String> = config
+        .tunnels
+        .iter()
+        .filter(|tunnel| tunnel.health_url.starts_with("https://"))
+        .map(|tunnel| tunnel.id.clone())
+        .collect();
 
     let supervisor = Supervisor::new(config, quiet)?;
 
@@ -384,7 +391,14 @@ fn serve(config: config::Config, flags: Flags) -> Result<i32, String> {
         if token_source == "cli" {
             println!("  提示       --token 只在本次运行生效，不会写进配置文件；想固定下来就改 panel.token 或设 SSH_PROXY_TOKEN");
         }
-        match &health {
+        // https 的 healthUrl 目前退化成 TCP 探测（见 50 D24 / 60 坑），启动时说一声，别让人以为探活准
+        let https_health: Vec<&str> = tunnels_with_https_health.iter().map(|s| s.as_str()).collect();
+        if !https_health.is_empty() {
+            println!(
+                "  提示       {} 的 healthUrl 是 https，探活会退化成 TCP 探测",
+                https_health.join("、")
+            );
+        }        match &health {
             Some(_) => println!("  自检       /healthz 200 OK"),
             None => println!("  自检       未拿到 /healthz 响应（服务仍在运行）"),
         }
