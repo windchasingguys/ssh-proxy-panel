@@ -274,9 +274,8 @@ fn print_help() {
   SSH_PROXY_PASSWORD  非交互设置密码时用（passwd 会优先读它）
   SSH_PROXY_TUNNEL_SECRET  非交互给 secret 子命令传密码
 
-注意（与 Node 版的已知差异）：
-  - `passwd` 在交互式终端下**会回显输入**（Rust 版没有关终端回显）；
-    非交互场景请用 SSH_PROXY_PASSWORD。
+提示：
+  - `passwd` 在交互式终端里输入不回显（与 Node 版一致）；非交互场景请用 SSH_PROXY_PASSWORD。
 "
     );
 }

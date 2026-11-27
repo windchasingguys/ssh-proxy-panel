@@ -29,6 +29,10 @@ getrandom = "0.2"
 scrypt = "0.11"
 ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
 
+# `passwd` 在 POSIX 上要关终端回显；Windows 走手写 kernel32 FFI，不额外引 crate
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [profile.release]
 opt-level = "z"
 lto = true

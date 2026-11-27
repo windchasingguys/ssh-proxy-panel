@@ -324,15 +324,114 @@ pub fn auth(config: &Config) {
     );
 }
 
+/// 关掉终端回显的守卫：`Drop` 时一定恢复，避免把用户终端搞坏。
+///
+/// Windows：`SetConsoleMode` 清 `ENABLE_ECHO_INPUT`（手写 kernel32 FFI，不引 crate）；
+/// POSIX：`tcgetattr`/`tcsetattr` 清 `ECHO`。
+struct EchoGuard {
+    #[cfg(windows)]
+    handle: *mut std::ffi::c_void,
+    #[cfg(windows)]
+    mode: u32,
+    #[cfg(unix)]
+    saved: libc::termios,
+}
+
+#[cfg(windows)]
+mod win_console {
+    use std::ffi::c_void;
+
+    pub const STD_INPUT_HANDLE: u32 = 0u32.wrapping_sub(10); // -10
+    pub const ENABLE_ECHO_INPUT: u32 = 0x0004;
+
+    extern "system" {
+        pub fn GetStdHandle(which: u32) -> *mut c_void;
+        pub fn GetConsoleMode(handle: *mut c_void, mode: *mut u32) -> i32;
+        pub fn SetConsoleMode(handle: *mut c_void, mode: u32) -> i32;
+    }
+}
+
+impl EchoGuard {
+    fn new() -> Option<Self> {
+        #[cfg(windows)]
+        {
+            unsafe {
+                let handle = win_console::GetStdHandle(win_console::STD_INPUT_HANDLE);
+                if handle.is_null() || handle as isize == -1 {
+                    return None;
+                }
+                let mut mode = 0u32;
+                if win_console::GetConsoleMode(handle, &mut mode) == 0 {
+                    return None; // 不是控制台（管道 / 重定向）
+                }
+                if win_console::SetConsoleMode(
+                    handle,
+                    mode & !win_console::ENABLE_ECHO_INPUT,
+                ) == 0
+                {
+                    return None;
+                }
+                Some(Self { handle, mode })
+            }
+        }
+        #[cfg(unix)]
+        {
+            unsafe {
+                let fd = libc::STDIN_FILENO;
+                if libc::isatty(fd) != 1 {
+                    return None;
+                }
+                let mut original: libc::termios = std::mem::zeroed();
+                if libc::tcgetattr(fd, &mut original) != 0 {
+                    return None;
+                }
+                let mut quiet: libc::termios = std::mem::zeroed();
+                std::ptr::copy_nonoverlapping(&original, &mut quiet, 1);
+                quiet.c_lflag &= !libc::ECHO;
+                if libc::tcsetattr(fd, libc::TCSAFLUSH, &quiet) != 0 {
+                    return None;
+                }
+                Some(Self { saved: original })
+            }
+        }
+        #[cfg(not(any(windows, unix)))]
+        {
+            None
+        }
+    }
+}
+
+impl Drop for EchoGuard {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        unsafe {
+            win_console::SetConsoleMode(self.handle, self.mode);
+        }
+        #[cfg(unix)]
+        unsafe {
+            libc::tcsetattr(libc::STDIN_FILENO, libc::TCSAFLUSH, &self.saved);
+        }
+    }
+}
+
 fn prompt_hidden(question: &str) -> Result<String, String> {
     use std::io::{BufRead, Write};
     print!("{}", question);
     std::io::stdout().flush().ok();
     let mut line = String::new();
-    std::io::stdin()
+    // 守卫活到读完这一行为止；离开作用域即恢复回显
+    let guard = EchoGuard::new();
+    let muted = guard.is_some();
+    let read = std::io::stdin()
         .lock()
         .read_line(&mut line)
-        .map_err(|e| format!("读取输入失败: {}", e))?;
+        .map_err(|e| format!("读取输入失败: {}", e));
+    drop(guard);
+    // 回显被关掉时用户看不到自己敲的回车，补一个换行
+    if muted {
+        println!();
+    }
+    read?;
     Ok(line.trim_end_matches(['\r', '\n']).to_string())
 }
 
