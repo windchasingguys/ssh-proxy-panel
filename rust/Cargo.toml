@@ -1,0 +1,37 @@
+[package]
+name = "ssh-proxy"
+version = "1.0.0"
+edition = "2021"
+description = "本地 SSH -N -L 隧道控制器 + Web 面板（Rust 实现，Node 版的等价替代）"
+license = "MIT"
+publish = false
+
+[[bin]]
+name = "ssh-proxy"
+path = "src/main.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "process", "signal", "sync", "macros", "fs"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+# preserve_order：写回配置时要保住用户手写文件的键序（见 70_Rust迁移评估.md 第四节）
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+base64 = "0.22"
+# 隧道凭据静态加密：enc:v1:<iv>:<tag>:<ct>（对应 secrets.mjs）
+aes-gcm = "0.10"
+getrandom = "0.2"
+# 面板登录：scrypt 哈希 + Ed25519 公钥验签（对应 auth.mjs）
+scrypt = "0.11"
+ed25519-dalek = { version = "2", features = ["pkcs8", "pem"] }
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

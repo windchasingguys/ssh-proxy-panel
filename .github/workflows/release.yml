@@ -20,10 +20,17 @@ jobs:
         with:
           node-version: 22
 
-      - name: 安装打包工具（esbuild / postject）
+      # 控制器默认用 Rust（rust/ 目录）。windows-latest 自带 stable 工具链，默认 MSVC 目标即可；
+      # esbuild / postject 只在回退 `--core=node` 时才需要，所以 npm ci 仍然保留。
+      - name: 确认 Rust 工具链
+        run: |
+          cargo --version
+          rustc --version
+
+      - name: 安装打包工具（esbuild / postject，回退用）
         run: npm ci
 
-      - name: 打包（Node SEA + csc 托盘）
+      - name: 打包（Rust 控制器 + csc 托盘）
         run: node scripts/build-exe.mjs
 
       - name: 冒烟验证产物

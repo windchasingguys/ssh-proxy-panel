@@ -330,18 +330,20 @@ node src/cli.mjs rmkey <id|指纹>         # 删除一把公钥
 ## 7. 打包成单个 exe（托盘）
 
 ```powershell
-npm install                 # 只为打包（esbuild / postject）
-node scripts/build-exe.mjs  # 产物在 dist/；--no-zip 可跳过压缩
+cargo build --release                        # 控制器（rust/ 目录）
+node scripts/build-exe.mjs                   # 产物在 dist/；--no-zip 可跳过压缩
+# node scripts/build-exe.mjs --core=node     # 回退：用旧的 Node SEA 控制器（需先 npm install）
 ```
 
 | 产物 | 说明 |
 |---|---|
-| `dist/ssh-proxy.exe` | **就这一个**（约 89 MB）：托盘 + 内嵌 Node 控制器 + 内嵌前端 |
+| `dist/ssh-proxy.exe` | **就这一个**（约 1.3 MB）：托盘 + 内嵌 Rust 控制器 + 内嵌前端 |
 | `dist/tunnels.example.json` · `dist/使用说明.txt` | 示例配置、给最终用户的三步说明 |
-| `dist/ssh-proxy-portable.zip` | 上面三个打成一个包（约 33 MB） |
+| `dist/ssh-proxy-portable.zip` | 上面三个打成一个包（约 0.6 MB） |
 
-**单文件怎么做到的**：控制器（Node SEA）和三个前端文件用 `csc /resource:` 内嵌进托盘 exe；首次运行解包到
-`%LOCALAPPDATA%\ssh-proxy\runtime\<构建号>\`，之后直接复用；新版本解到新目录并清掉旧的。
+**单文件怎么做到的**：控制器（默认 Rust，可 `--core=node` 回退到 Node SEA）和三个前端文件用 `csc /resource:` 内嵌进托盘 exe；
+首次运行解包到 `%LOCALAPPDATA%\ssh-proxy\runtime\<构建号>\`，之后直接复用；新版本解到新目录并清掉旧的。
+控制器只要求"能 `serve --config <文件> --quiet` / `init --target <文件>` / `version`"，所以两种实现可以互换。
 
 - 配置 / 日志 / `.ssh-proxy\` 都在 **exe 旁边**；目录不可写（只读 U 盘）则退回 `%APPDATA%\ssh-proxy\`。
 - `ssh-proxy.exe --prepare` 只解包不弹托盘，方便安装脚本或自检。
@@ -548,7 +550,7 @@ ssh-proxy/
 ├─ test/
 │  ├─ fake-ssh.mjs      假 ssh（监听本地端口、会调 askpass 校验密码），让测试不需要真服务器
 │  ├─ demo-config.mjs   生成演示配置（ssh 指向 fake-ssh），用于截图和 UI 检查
-│  ├─ smoke.mjs         端到端 97 项：起停/自愈/退避/端口占用/孤儿回收/配置增删改/登录/密钥/隧道密码
+│  ├─ smoke.mjs         端到端 97 项：起停/自愈/退避/端口占用/孤儿回收/配置增删改/登录/密钥/隧道密码（--target rust 可跑 Rust 控制器）
 │  └─ ui-check.mjs      无头浏览器 21～49 项：渲染、弹层可见性、脱敏、开关、抽屉、表单、登录/退出、密钥注册
 ├─ dist/                打包产物（git 忽略）
 ├─ start.cmd            Windows 双击启动（开发态）
@@ -572,7 +574,7 @@ node test/ui-check.mjs --url http://127.0.0.1:7799/ --allow-write
 
 - **只做了 Windows 的托盘/打包**。SEA 脚本跨平台通用，macOS/Linux 要另做托盘。
 - **前端是内嵌的**：改了 `public/` 必须重新打包 exe（源码跑则不受影响）。
-- **单文件首次启动慢 1~2 秒**：要把 89 MB 解包到 `%LOCALAPPDATA%`；之后正常。
+- **单文件首次启动**要解包约 1.2 MB 到 `%LOCALAPPDATA%`（Rust 控制器之后启动是瞬时的）。
 - **会话与"连接时输入"的密码都在内存里**：面板/托盘退出即失效，这是有意的。
 - **一条隧道只能用一种 SSH 认证方式**：想"先试密钥再退回密码"就开两条隧道；自动降级会让失败原因变模糊。
 

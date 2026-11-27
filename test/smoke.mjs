@@ -23,6 +23,7 @@ const ROOT = path.join(HERE, '..');
 const TMP = path.join(ROOT, '.tmp-test');
 const FAKE_SSH = path.join(HERE, 'fake-ssh.mjs');
 const TOKEN = 'test-token-123';
+// 两种跑法：node test/smoke.mjs（进程内 Node 实现）/ node test/smoke.mjs --target rust（同一批断言跑 Rust 二进制）
 
 const results = [];
 const check = (name, ok, detail = '') => {
@@ -60,6 +61,87 @@ async function waitFor(label, fn, timeoutMs = 15000) {
   throw new Error(`等待超时: ${label}`);
 }
 
+/**
+ * 起一块面板：默认是进程内的 Node 实现；
+ * 设了 SSH_PROXY_TEST_BIN=<可执行文件> 时改为 spawn 那个二进制（用来验证 Rust 版等价性）。
+ *
+ * 返回 { base, port, shutdown }：两种模式对外接口一致，下面的断言不用改。
+ */
+const QUIET_LOGGER = { log() {}, warn() {}, error: console.error };
+// 外部实现模式：`--target rust` 用仓库里的 Rust 二进制；也可以直接给 SSH_PROXY_TEST_BIN
+const EXTERNAL_BIN = (() => {
+  if (process.env.SSH_PROXY_TEST_BIN) return process.env.SSH_PROXY_TEST_BIN;
+  const idx = process.argv.indexOf('--target');
+  const target = idx > 0 ? process.argv[idx + 1] : '';
+  if (target === 'rust') {
+    return path.join(ROOT, 'rust', 'target', 'x86_64-pc-windows-gnu', 'release', 'ssh-proxy.exe');
+  }
+  return '';
+})();
+
+async function bootPanel(configFile, { port = 0, reapOrphans = false } = {}) {
+  if (!EXTERNAL_BIN) {
+    const raw = JSON.parse(fs.readFileSync(configFile, 'utf8'));
+    const config = normalizeConfig(raw, configFile);
+    const supervisor = new Supervisor(config, { logger: QUIET_LOGGER });
+    await supervisor.init({ reapOrphans });
+    const { server, close } = await createPanelServer({ supervisor, config });
+    await new Promise((resolve) => server.listen(port, '127.0.0.1', resolve));
+    const actualPort = server.address().port;
+    return {
+      base: `http://127.0.0.1:${actualPort}`,
+      port: actualPort,
+      shutdown: async () => {
+        await supervisor.shutdown();
+        await close();
+      },
+    };
+  }
+
+  const actualPort = port || (await pickPorts(1))[0];
+  const child = spawn(
+    EXTERNAL_BIN,
+    ['serve', '--config', configFile, '--port', String(actualPort), '--quiet'],
+    {
+      cwd: ROOT,
+      stdio: 'ignore',
+      windowsHide: true,
+      env: { ...process.env, SSH_PROXY_WEB_ROOT: path.join(ROOT, 'public') },
+    },
+  );
+  const base = `http://127.0.0.1:${actualPort}`;
+  await waitFor('外部实现就绪', async () => {
+    if (child.exitCode !== null) throw new Error(`外部实现已退出（code ${child.exitCode}）`);
+    try {
+      const res = await fetch(`${base}/healthz`);
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }, 15000);
+
+  return {
+    base,
+    port: actualPort,
+    shutdown: async () => {
+      // 优先走优雅退出（会停隧道 + 清 runtime.json）
+      try {
+        await fetch(`${base}/api/shutdown`, { method: 'POST' });
+      } catch {
+        /* 已经退出了 */
+      }
+      await waitFor('外部实现退出', async () => child.exitCode !== null, 10000).catch(() => {
+        try {
+          child.kill();
+        } catch {
+          /* ignore */
+        }
+      });
+      await sleep(300);
+    },
+  };
+}
+
 async function main() {
   fs.rmSync(TMP, { recursive: true, force: true });
   fs.mkdirSync(TMP, { recursive: true });
@@ -94,14 +176,9 @@ async function main() {
   };
   const configFile = path.join(TMP, 'tunnels.json');
   fs.writeFileSync(configFile, JSON.stringify(raw, null, 2));
-  const config = normalizeConfig(raw, configFile);
 
-  const quiet = { log() {}, warn() {}, error: console.error };
-  const supervisor = new Supervisor(config, { logger: quiet });
-  await supervisor.init({ reapOrphans: false });
-  const { server, close } = await createPanelServer({ supervisor, config });
-  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const base = `http://127.0.0.1:${server.address().port}`;
+  const panel = await bootPanel(configFile);
+  const base = panel.base;
   const headers = { 'x-panel-token': TOKEN };
   const getState = async () => (await fetch(`${base}/api/state`, { headers })).json();
   const tunnelOf = async (id) => (await getState()).tunnels.find((t) => t.id === id);
@@ -506,8 +583,7 @@ async function main() {
 
   // ---- 11. 全部关闭 + 优雅退出 ----
   await fetch(`${base}/api/all/stop`, { method: 'POST', headers });
-  await supervisor.shutdown();
-  await close();
+  await panel.shutdown();
   await sleep(500);
 
   const runtimeFile = path.join(TMP, '.ssh-proxy', 'runtime.json');
@@ -530,13 +606,13 @@ async function main() {
   const reapRaw = { tunnels: [{ id: 'orphan', name: 'orphan', localPort: orphanPort, target: '10.0.0.9:80', via: 'deploy@edge.test:22' }] };
   const reapConfigFile = path.join(reapDir, 'tunnels.json');
   fs.writeFileSync(reapConfigFile, JSON.stringify(reapRaw));
-  const sup2 = new Supervisor(normalizeConfig(reapRaw, reapConfigFile), { logger: quiet });
-  await sup2.init();
+  // 这一节要验的就是"启动时回收上次遗留的 ssh"：外部实现永远会回收，Node 版显式打开
+  const reapPanel = await bootPanel(reapConfigFile, { port: (await pickPorts(1))[0], reapOrphans: true });
   const reaped = await waitFor('遗留 ssh 被回收', async () => !processAlive(orphan.pid) || !(await probeTcp(orphanPort)), 15000);
   check('重启面板时回收上次遗留的 ssh 进程', reaped);
   await sleep(500);
   check('回收后端口已释放', !(await probeTcp(orphanPort)));
-  await sup2.shutdown();
+  await reapPanel.shutdown();
   try {
     orphan.kill('SIGKILL');
   } catch {
@@ -562,12 +638,8 @@ async function main() {
     tunnels: [],
   };
   fs.writeFileSync(authFile, JSON.stringify(authRaw, null, 2));
-  const authConfig = normalizeConfig(authRaw, authFile);
-  const authSup = new Supervisor(authConfig, { logger: quiet });
-  await authSup.init({ reapOrphans: false });
-  const authServer = await createPanelServer({ supervisor: authSup, config: authConfig });
-  await new Promise((resolve) => authServer.server.listen(0, '127.0.0.1', resolve));
-  const authBase = `http://127.0.0.1:${authServer.server.address().port}`;
+  const authPanel = await bootPanel(authFile);
+  const authBase = authPanel.base;
 
   const loginAs = async (body) => {
     const res = await fetch(`${authBase}/api/session`, {
@@ -634,8 +706,7 @@ async function main() {
   const deleteLast = await fetch(`${authBase}/api/auth/keys/only`, { method: 'DELETE', headers: { cookie: onlyLogin.cookie } });
   check('不允许删掉最后一种登录方式', deleteLast.status === 400, `status=${deleteLast.status}`);
 
-  await authSup.shutdown();
-  await authServer.close();
+  await authPanel.shutdown();
 
   const failed = results.filter((r) => !r.ok);
   console.log(`\n${results.length - failed.length}/${results.length} 项通过`);

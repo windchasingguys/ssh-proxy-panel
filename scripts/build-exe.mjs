@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
- * 打包成**一个** exe：托盘 + 内嵌的 Node 控制器（SEA）+ 内嵌前端。
+ * 打包成**一个** exe：托盘 + 内嵌的控制器 + 内嵌前端。
  *
- *   node scripts/build-exe.mjs            # 完整打包（含 zip）
+ *   node scripts/build-exe.mjs                 # 默认用 Rust 控制器（rust/ 目录，cargo build --release）
+ *   node scripts/build-exe.mjs --core=node     # 回退到旧的 Node SEA 控制器（esbuild + postject）
  *   node scripts/build-exe.mjs --no-zip
  *
  * 产物 dist/：
@@ -10,6 +11,8 @@
  *   tunnels.example.json
  *   使用说明.txt
  *   ssh-proxy-portable.zip
+ *
+ * 两种控制器对托盘壳是同一件事：都是"能 `serve --config <文件> --quiet` / `init --target <文件>` / `version`"的可执行文件。
  */
 import { build } from 'esbuild';
 import fs from 'node:fs';
@@ -58,20 +61,50 @@ function findCsc() {
   return found;
 }
 
-/** 版本号：时间戳，用来区分 %LOCALAPPDATA% 下的解包目录 */
-function buildId() {
-  const d = new Date();
-  const p = (n) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+/** 控制器实现：默认 rust，可用 --core=node 回退 */
+function coreChoice() {
+  const flag = process.argv.find((a) => a.startsWith('--core'));
+  if (!flag) return 'rust';
+  const value = flag.includes('=') ? flag.split('=')[1] : process.argv[process.argv.indexOf('--core') + 1];
+  if (value !== 'rust' && value !== 'node') fail(`--core 只能是 rust 或 node（收到 ${value}）`);
+  return value;
 }
 
-async function main() {
-  log('清理 .build / dist');
-  fs.rmSync(BUILD, { recursive: true, force: true });
-  fs.rmSync(DIST, { recursive: true, force: true });
-  fs.mkdirSync(BUILD, { recursive: true });
-  fs.mkdirSync(DIST, { recursive: true });
+/** 找 cargo：env > 本机手工工具链 > PATH */
+function findCargo() {
+  const candidates = [
+    process.env.CARGO_BIN,
+    path.join(process.env.LOCALAPPDATA || '', 'rust-toolchain', '1.100.0', 'bin', 'cargo.exe'),
+    'cargo',
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (candidate === 'cargo' || fs.existsSync(candidate)) return candidate;
+  }
+  return fail('找不到 cargo；用 CARGO_BIN 指定，或先安装 Rust 工具链');
+}
 
+/** Rust 控制器：cargo build --release，产物复制成 core */
+function buildRustCore() {
+  log('编译 Rust 控制器（cargo build --release）');
+  const cargo = findCargo();
+  const rustDir = path.join(ROOT, 'rust');
+  run(cargo, ['build', '--release'], { cwd: rustDir });
+
+  // 本机是 gnu 手工工具链（target/<triple>/release），CI 的 windows-latest 是默认 MSVC（target/release）
+  const candidates = [
+    path.join(rustDir, 'target', 'x86_64-pc-windows-gnu', 'release', 'ssh-proxy.exe'),
+    path.join(rustDir, 'target', 'release', 'ssh-proxy.exe'),
+  ];
+  const built = candidates.find((p) => fs.existsSync(p));
+  if (!built) fail(`cargo 说成功了，但没找到产物：${candidates.join(' 或 ')}`);
+  fs.copyFileSync(built, CORE);
+  const mb = (fs.statSync(CORE).size / 1024 / 1024).toFixed(2);
+  console.log(`  ${CORE}  ${mb} MB`);
+  return Number(mb);
+}
+
+/** Node 控制器（旧路径，留作回退）：esbuild → SEA blob → postject 注入 */
+async function buildNodeCore() {
   log('打包 JS（esbuild → 单个 CJS）');
   await build({
     entryPoints: [path.join(ROOT, 'src/cli.mjs')],
@@ -99,6 +132,25 @@ async function main() {
   run(process.execPath, [postjectCli, CORE, 'NODE_SEA_BLOB', path.join(BUILD, 'sea-prep.blob'), '--sentinel-fuse', FUSE], {
     quietStderr: true, // postject 会打一行 "signature seems corrupted"，不是错
   });
+  return Number((fs.statSync(CORE).size / 1024 / 1024).toFixed(2));
+}
+
+/** 版本号：时间戳，用来区分 %LOCALAPPDATA% 下的解包目录 */
+function buildId() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
+}
+
+async function main() {
+  log('清理 .build / dist');
+  fs.rmSync(BUILD, { recursive: true, force: true });
+  fs.rmSync(DIST, { recursive: true, force: true });
+  fs.mkdirSync(BUILD, { recursive: true });
+  fs.mkdirSync(DIST, { recursive: true });
+
+  const core = coreChoice();
+  const coreMb = core === 'rust' ? buildRustCore() : await buildNodeCore();
 
   log('生成版本信息');
   const id = buildId();
@@ -136,7 +188,7 @@ async function main() {
       '4. 右键菜单：打开面板 / 全部开启 / 全部关闭 / 重载配置 / 打开配置文件夹 / 编辑 tunnels.json / 退出。',
       '',
       '它是怎么跑起来的：',
-      '- exe 里内嵌了 Node 控制器（约 89 MB）和面板前端；首次运行解包到 %LOCALAPPDATA%\\ssh-proxy\\runtime\\<版本>\\。',
+      `- exe 里内嵌了${core === 'rust' ? ' Rust 控制器' : ' Node 控制器'}（约 ${coreMb} MB）和面板前端；首次运行解包到 %LOCALAPPDATA%\\ssh-proxy\\runtime\\<版本>\\。`,
       '- 之后每次启动直接复用，不会重复解包；升级版本会解到新目录并清掉旧的。',
       '- 你的配置和日志都在 exe 所在目录（tunnels.json / tray-daemon.log / .ssh-proxy\\），删 exe 前先退出托盘。',
       '- 如果 exe 所在目录不可写（比如只读 U 盘），配置会自动放到 %APPDATA%\\ssh-proxy\\。',

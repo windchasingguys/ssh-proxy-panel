@@ -16,6 +16,11 @@
     "demo": "node test/demo-config.mjs",
     "test": "node test/smoke.mjs",
     "test:ui": "node test/ui-check.mjs --url http://127.0.0.1:7799/ --allow-write",
+    "test:rust": "node rust/tools/parity.mjs",
+    "test:rust:auth": "node rust/tools/auth-parity.mjs",
+    "test:rust:config": "node rust/tools/config-parity.mjs",
+    "test:rust:cli": "node rust/tools/cli-parity.mjs",
+    "test:rust:smoke": "node test/smoke.mjs --target rust",
     "build:exe": "node scripts/build-exe.mjs"
   },
   "engines": {

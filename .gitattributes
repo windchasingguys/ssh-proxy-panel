@@ -10,6 +10,8 @@
 *.md    text eol=lf
 *.yml   text eol=lf
 *.service text eol=lf
+*.rs    text eol=lf
+*.toml  text eol=lf
 
 # Windows 脚本：必须 CRLF，否则 cmd.exe / 任务计划可能出问题
 *.cmd   text eol=crlf

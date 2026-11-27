@@ -8,6 +8,10 @@ node_modules/
 dist/
 .build/
 
+# Rust 迁移（rust/）：产物与本机工具链配置不进库
+rust/target/
+rust/.cargo/config.toml
+
 # 打包/写入过程中的临时文件（配置是用 <文件>.<pid>.tmp 原子替换的）
 *.tmp
 *.log
@@ -24,6 +28,11 @@ tunnels.json
 # .tmp-test/ .tmp-demo/ .tmp-diag/ .tmp-ask2/ ... 统一按前缀忽略
 .tmp-*/
 
+# ---------- 本地交接文档 ----------
+# agent.md.d/ 是本地维护的项目交接/上下文文档（00_启动包 ~ 90_归档），
+# 面向本机协作，不随仓库分发；需要共享时另行导出，不要提交。
+/agent.md.d/
+
 # ---------- 编辑器 / 操作系统 ----------
 .idea/
 .openidea/
@@ -38,3 +47,4 @@ Microsoft/
 # docs/                  —— README 引用的面板截图，需要进库
 # tunnels.example.json   —— 示例配置（不含真实地址），需要进库
 # package-lock.json      —— 锁定打包工具的版本，需要进库
+# agent.md.d/            —— 本地交接文档，不进库（见上）

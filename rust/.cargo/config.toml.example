@@ -1,0 +1,20 @@
+# 模板：复制成 config.toml 后按本机路径改。config.toml 被 .gitignore 忽略。
+#
+# 为什么需要这些设置（本机实测结论，别省）：
+#  - 本项目在本机用 llvm-mingw（ucrt）编译，不走 MSVC；
+#  - Rust 的 x86_64-pc-windows-gnu 目标会传 `-lgcc -lgcc_eh`，而 llvm-mingw 用的是 compiler-rt，
+#    不带 libgcc；这两个库在 rustc sysroot 的 self-contained 目录里；
+#  - rustflags 必须写在 [build] 下：写 [target.<triple>.rustflags] 不作用于 build script，
+#    而 proc-macro2 / serde 等 build script 正是缺 libgcc 的那批；
+#  - 最终生效的是 [env] LIBRARY_PATH —— gcc/clang 自己的库搜索路径，覆盖所有编译单元；
+#  - 用 rustup 官方 gnu 工具链（带 rust-mingw 组件）时通常不需要 linker/rustflags/LIBRARY_PATH。
+[target.x86_64-pc-windows-gnu]
+# linker = "C:\\path\\to\\llvm-mingw\\bin\\gcc.exe"
+# ar     = "C:\\path\\to\\llvm-mingw\\bin\\llvm-ar.exe"
+
+[build]
+target = "x86_64-pc-windows-gnu"
+# rustflags = ["-L", "C:\\path\\to\\rust-toolchain\\<ver>\\lib\\rustlib\\x86_64-pc-windows-gnu\\lib\\self-contained"]
+
+[env]
+# LIBRARY_PATH = { value = "C:\\path\\to\\rust-toolchain\\<ver>\\lib\\rustlib\\x86_64-pc-windows-gnu\\lib\\self-contained", force = true }
