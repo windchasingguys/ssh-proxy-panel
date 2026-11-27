@@ -232,18 +232,24 @@ pub fn kill_tree(pid: u32) {
             .stderr(std::process::Stdio::null())
             .status();
     } else {
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &format!("-{}", pid)])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        let group = format!("-{}", pid);
-        std::thread::sleep(std::time::Duration::from_millis(1200));
-        let _ = std::process::Command::new("kill")
-            .args(["-KILL", &group])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+        // POSIX：我们 spawn 的 ssh 是进程组组长（`process_group(0)`），所以要打 -pid；
+        // 但**别人的孤儿**（比如测试里手工起的 ssh）不是组长，`kill(-pid)` 会 ESRCH。
+        // 两条都发一遍：对组长有效的是前者，对普通进程有效的是后者，互相不冲突。
+        let pid_i = pid as i32;
+        unsafe {
+            libc::kill(-pid_i, libc::SIGTERM);
+            libc::kill(pid_i, libc::SIGTERM);
+        }
+        // 给 ssh 一点体面退出的时间；放到独立线程里，别阻塞 tokio 的工作线程
+        let escalated = pid;
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            let pid_i = escalated as i32;
+            unsafe {
+                libc::kill(-pid_i, libc::SIGKILL);
+                libc::kill(pid_i, libc::SIGKILL);
+            }
+        });
     }
 }
 
