@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Node 版（参考实现）的端到端冒烟：不需要 npm install，也不需要真实 SSH 服务器
   smoke:
     name: smoke · node ${{ matrix.node }} · ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
@@ -22,6 +23,79 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
 
-      # 测试自带假 ssh（test/fake-ssh.mjs），不需要真实服务器，也不需要 npm install
       - name: 端到端冒烟测试
         run: node test/smoke.mjs
+
+  # Rust 版（发布实现）：编译后把同一批 97 条断言跑在真实二进制上
+  rust:
+    name: rust · node ${{ matrix.node }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22]
+    steps:
+      - uses: actions/checkout@v4
+
+      # 别赌 runner 自带 Rust；显式装 stable（默认目标是 MSVC / gnu，都能直接编）
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: 编译 Rust 控制器
+        run: cargo build --release --manifest-path rust/Cargo.toml
+
+      - name: 冒烟测试（跑 Rust 二进制）
+        run: node test/smoke.mjs --target rust
+
+  # 无头浏览器 UI 回归（Linux runner 自带 google-chrome）
+  ui:
+    name: ui · ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: 编译 Rust 控制器
+        run: cargo build --release --manifest-path rust/Cargo.toml
+
+      # 注意：面板必须和 ui-check 在**同一步**里起/停——GitHub Actions 每步结束会清理子进程
+      - name: 起演示面板 + UI 检查（无头 Chrome）
+        run: |
+          set -o pipefail
+          node test/demo-config.mjs
+          SSH_PROXY_WEB_ROOT="$PWD/public" rust/target/release/ssh-proxy \
+            serve --config .tmp-demo/tunnels.json --port 7799 --quiet &
+          SERVER_PID=$!
+          trap 'kill $SERVER_PID 2>/dev/null || true' EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:7799/healthz > /dev/null; then break; fi
+            sleep 0.5
+          done
+          curl -fsS http://127.0.0.1:7799/healthz
+          node test/ui-check.mjs --url http://127.0.0.1:7799/ --allow-write --out .tmp-demo/panel.png | tee ui.log
+          # 没找到浏览器时脚本会打"跳过"并以 0 退出，这里把它当失败处理
+          if grep -q '跳过' ui.log; then echo "::error::没有找到 Chrome，UI 检查被跳过"; exit 1; fi
+          grep -E '[0-9]+/[0-9]+ 项通过' ui.log
+
+      - name: 留一份截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-panel-screenshot
+          path: .tmp-demo/panel.png
+          if-no-files-found: ignore

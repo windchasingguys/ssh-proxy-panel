@@ -102,6 +102,8 @@ async function main() {
     chrome,
     [
       '--headless=new',
+      // CI（尤其容器）里 Chrome 的沙箱常常起不来，只在 CI 下关掉
+      ...(process.env.CI ? ['--no-sandbox'] : []),
       '--disable-gpu',
       '--no-first-run',
       '--no-default-browser-check',

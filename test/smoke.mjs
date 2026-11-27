@@ -74,7 +74,15 @@ const EXTERNAL_BIN = (() => {
   const idx = process.argv.indexOf('--target');
   const target = idx > 0 ? process.argv[idx + 1] : '';
   if (target === 'rust') {
-    return path.join(ROOT, 'rust', 'target', 'x86_64-pc-windows-gnu', 'release', 'ssh-proxy.exe');
+    // 本机是手工 gnu 工具链（target/<triple>/release），CI/其它平台是默认目标（target/release）；
+    // Windows 带 .exe，Linux/macOS 不带。
+    const exe = process.platform === 'win32' ? 'ssh-proxy.exe' : 'ssh-proxy';
+    const base = path.join(ROOT, 'rust', 'target');
+    const candidates = [
+      path.join(base, 'x86_64-pc-windows-gnu', 'release', exe),
+      path.join(base, 'release', exe),
+    ];
+    return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[1];
   }
   return '';
 })();

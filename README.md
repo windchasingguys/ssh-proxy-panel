@@ -248,7 +248,7 @@ node src/cli.mjs secret app     # 不开面板也能送一次密码（面板在�
 | POST | `/api/tunnels/:id/secret` | 给"连接时输入"的隧道送一次密码 |
 | GET | `/api/tunnels/:id/logs?lines=200` | 该隧道日志 |
 | POST | `/api/all/start` · `/api/all/stop` | 全部开关 |
-| GET/PUT | `/api/settings` | `ssh` / `supervision` + `panel` 的令牌与会话 |
+| PUT/PATCH | `/api/settings` | 改 `ssh` / `supervision` + `panel` 的令牌与会话（读配置用上面的 `/api/config`） |
 | POST | `/api/reload` | 重载 `tunnels.json` |
 | POST | `/api/shutdown` | 优雅退出（先停隧道再退） |
 
