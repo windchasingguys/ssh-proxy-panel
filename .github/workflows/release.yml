@@ -54,6 +54,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "解包出来的控制器跑不起来（退出码 $LASTEXITCODE）" }
           Write-Host "产物自检通过：$core"
 
+          # 再拿**发出去的那个控制器**跑一遍完整冒烟：防"本地能跑、发出去的 exe 不行"
+          $env:SSH_PROXY_TEST_BIN = $core
+          node test/smoke.mjs
+          if ($LASTEXITCODE -ne 0) { throw "发布产物的冒烟测试失败（退出码 $LASTEXITCODE）" }
+          Write-Host "发布产物冒烟通过（97 项）"
+
       - name: 上传到 Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
